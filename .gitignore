@@ -30,3 +30,14 @@ ExportOptions.plist
 *.o
 *.a
 *.dSYM/
+
+# ── Windows port (Python / PyInstaller) ───────────────────────────────────────
+Windows/dist/
+Windows/build/
+Windows/installer/
+Windows/__pycache__/
+Windows/src/__pycache__/
+Windows/src/dialogs/__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo

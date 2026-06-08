@@ -279,16 +279,19 @@ class PDFViewerWidget(QGraphicsView):
         if not (self._doc and new_text.strip()):
             return
         page = self._doc[self._page_idx]
-        page.add_redact_annot(block_rect, fill=(1, 1, 1))
-        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
-        page.add_freetext_annot(
-            block_rect, new_text,
-            fontsize=11, fontname="helv",
-            text_color=(0, 0, 0), fill_color=None,
-        )
-        self.render_current_page()
-        self.document_modified.emit()
-        self.status_message.emit("Text updated.")
+        try:
+            page.add_redact_annot(block_rect)
+            page.apply_redactions()
+            page.add_freetext_annot(
+                block_rect, new_text,
+                fontsize=11, fontname="helv",
+                text_color=(0, 0, 0),
+            )
+            self.render_current_page()
+            self.document_modified.emit()
+            self.status_message.emit("Text updated.")
+        except Exception as e:
+            self.status_message.emit(f"Edit text failed: {e}")
 
     def insert_image_at(self, pdf_pt: fitz.Point, image_path: str) -> None:
         if not self._doc:
@@ -437,19 +440,7 @@ class PDFViewerWidget(QGraphicsView):
             pass  # handled in move/release
 
         elif tool == AnnotationTool.LINE:
-            if self._line_start is None:
-                # First click — place start point marker
-                self._line_start = pdf_pt
-                dot = QGraphicsEllipseItem(
-                    scene_pt.x() - 4, scene_pt.y() - 4, 8, 8)
-                dot.setBrush(QBrush(self.stroke_color))
-                dot.setPen(Qt.PenStyle.NoPen)
-                self._line_start_item = dot
-                self._scene.addItem(dot)
-                self.status_message.emit("Line: click endpoint to finish.")
-            else:
-                # Second click — draw line
-                self._finalize_line(pdf_pt)
+            pass  # drag-to-draw: start captured in _press_pdf; preview in mouseMoveEvent
 
         elif tool == AnnotationTool.STICKY_NOTE:
             if self.on_request_sticky_note:
@@ -496,7 +487,9 @@ class PDFViewerWidget(QGraphicsView):
 
         elif tool in (AnnotationTool.RECTANGLE, AnnotationTool.OVAL):
             if self._press_scene:
-                r = QRectF(self._press_scene, scene_pt).normalized()
+                mods = QApplication.keyboardModifiers()
+                end_scene = self._constrain_square(self._press_scene, scene_pt, mods)
+                r = QRectF(self._press_scene, end_scene).normalized()
                 self._remove_temp_item()
                 if tool == AnnotationTool.RECTANGLE:
                     item = QGraphicsRectItem(r)
@@ -506,6 +499,18 @@ class PDFViewerWidget(QGraphicsView):
                 item.setPen(pen)
                 brush_color = QColor(self.fill_color)
                 item.setBrush(QBrush(brush_color if self.has_fill else QColor(0, 0, 0, 0)))
+                self._temp_item = item
+                self._scene.addItem(item)
+
+        elif tool == AnnotationTool.LINE:
+            if self._press_scene:
+                mods = QApplication.keyboardModifiers()
+                end_scene = self._constrain_45(self._press_scene, scene_pt, mods)
+                self._remove_temp_item()
+                item = QGraphicsLineItem(QLineF(self._press_scene, end_scene))
+                pen = QPen(self.stroke_color, self.stroke_width)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                item.setPen(pen)
                 self._temp_item = item
                 self._scene.addItem(item)
 
@@ -563,15 +568,29 @@ class PDFViewerWidget(QGraphicsView):
 
         elif tool in (AnnotationTool.RECTANGLE, AnnotationTool.OVAL):
             self._remove_temp_item()
-            if self._press_pdf:
+            if self._press_pdf and self._press_scene:
+                mods = QApplication.keyboardModifiers()
+                end_scene = self._constrain_square(self._press_scene, scene_pt, mods)
+                end_pdf = self._scene_to_pdf(end_scene)
                 r = fitz.Rect(
-                    min(self._press_pdf.x, pdf_pt.x),
-                    min(self._press_pdf.y, pdf_pt.y),
-                    max(self._press_pdf.x, pdf_pt.x),
-                    max(self._press_pdf.y, pdf_pt.y),
+                    min(self._press_pdf.x, end_pdf.x),
+                    min(self._press_pdf.y, end_pdf.y),
+                    max(self._press_pdf.x, end_pdf.x),
+                    max(self._press_pdf.y, end_pdf.y),
                 )
                 if r.width > 4 and r.height > 4:
                     self._finalize_shape(r, tool)
+
+        elif tool == AnnotationTool.LINE:
+            self._remove_temp_item()
+            if self._press_pdf and self._press_scene:
+                mods = QApplication.keyboardModifiers()
+                end_scene = self._constrain_45(self._press_scene, scene_pt, mods)
+                end_pdf = self._scene_to_pdf(end_scene)
+                dx = end_pdf.x - self._press_pdf.x
+                dy = end_pdf.y - self._press_pdf.y
+                if (dx * dx + dy * dy) > 16:  # at least 4px
+                    self._finalize_line(self._press_pdf, end_pdf)
 
         self._press_pdf = None
         self._press_scene = None
@@ -687,27 +706,57 @@ class PDFViewerWidget(QGraphicsView):
         self.render_current_page()
         self.document_modified.emit()
 
-    def _finalize_line(self, end_pdf: fitz.Point) -> None:
-        if self._line_start_item:
-            self._scene.removeItem(self._line_start_item)
-            self._line_start_item = None
-        if not self._line_start:
-            return
-        page = self._doc[self._page_idx]
-        annot = page.add_line_annot(self._line_start, end_pdf)
-        annot.set_colors(stroke=_fitz_color(self.stroke_color))
-        annot.set_border(width=self.stroke_width)
-        annot.update()
-        self._line_start = None
-        self.render_current_page()
-        self.document_modified.emit()
-        self.status_message.emit("")
+    def _finalize_line(self, start_pdf: fitz.Point, end_pdf: fitz.Point) -> None:
+        try:
+            page = self._doc[self._page_idx]
+            annot = page.add_line_annot(start_pdf, end_pdf)
+            annot.set_colors(stroke=_fitz_color(self.stroke_color))
+            annot.set_border(width=self.stroke_width)
+            annot.update()
+            self.render_current_page()
+            self.document_modified.emit()
+            self.status_message.emit("Line added.")
+        except Exception as e:
+            self.status_message.emit(f"Line error: {e}")
 
     def _cancel_line_start(self) -> None:
-        if self._line_start_item:
-            self._scene.removeItem(self._line_start_item)
-            self._line_start_item = None
-        self._line_start = None
+        pass  # no-op: line is now drag-based
+
+    # ── Shift-key constraint helpers ──────────────────────────────────────────
+
+    @staticmethod
+    def _constrain_square(start: QPointF, end: QPointF,
+                          mods: Qt.KeyboardModifier) -> QPointF:
+        """If Shift held, constrain end so the bounding box is a square."""
+        if not (mods & Qt.KeyboardModifier.ShiftModifier):
+            return end
+        dx = end.x() - start.x()
+        dy = end.y() - start.y()
+        side = min(abs(dx), abs(dy))
+        return QPointF(
+            start.x() + (side if dx >= 0 else -side),
+            start.y() + (side if dy >= 0 else -side),
+        )
+
+    @staticmethod
+    def _constrain_45(start: QPointF, end: QPointF,
+                      mods: Qt.KeyboardModifier) -> QPointF:
+        """If Shift held, constrain line to nearest 45-degree angle."""
+        if not (mods & Qt.KeyboardModifier.ShiftModifier):
+            return end
+        import math
+        dx = end.x() - start.x()
+        dy = end.y() - start.y()
+        length = math.hypot(dx, dy)
+        if length < 1:
+            return end
+        angle = math.degrees(math.atan2(dy, dx))
+        snapped = round(angle / 45) * 45
+        rad = math.radians(snapped)
+        return QPointF(
+            start.x() + length * math.cos(rad),
+            start.y() + length * math.sin(rad),
+        )
 
     def _remove_temp_item(self) -> None:
         if self._temp_item:
@@ -748,11 +797,22 @@ class PDFViewerWidget(QGraphicsView):
     def _handle_edit_text_click(self, pdf_pt: fitz.Point) -> None:
         if not self.on_request_edit_text:
             return
-        # Find which text block contains the click
+        if not self._text_block_items:
+            self.status_message.emit("No editable text found on this page.")
+            return
+        # Find the smallest block that contains the click (expand by 3pt for easier targeting)
+        best_item = None
+        best_area = float("inf")
         for item in self._text_block_items:
             r: fitz.Rect = item._text_rect
-            if r.contains(pdf_pt):
-                text: str = item._text
-                self.on_request_edit_text(r, text)
-                return
-        self.status_message.emit("Click on a highlighted text block to edit it.")
+            expanded = fitz.Rect(r.x0 - 3, r.y0 - 3, r.x1 + 3, r.y1 + 3)
+            if (expanded.x0 <= pdf_pt.x <= expanded.x1 and
+                    expanded.y0 <= pdf_pt.y <= expanded.y1):
+                area = r.width * r.height
+                if area < best_area:
+                    best_area = area
+                    best_item = item
+        if best_item:
+            self.on_request_edit_text(best_item._text_rect, best_item._text)
+        else:
+            self.status_message.emit("Click on a blue-outlined text block to edit it.")

@@ -33,11 +33,10 @@ def _group_separator() -> QFrame:
 
 def _group_label(text: str) -> QLabel:
     lbl = QLabel(text.upper())
-    font = QFont()
-    font.setPointSize(7)
+    font = QFont("Segoe UI", 7)
     font.setBold(True)
     lbl.setFont(font)
-    lbl.setStyleSheet("color: #888; padding: 0 4px;")
+    lbl.setStyleSheet("color: #555; padding: 0 6px;")
     lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
     return lbl
 
@@ -45,31 +44,20 @@ def _group_label(text: str) -> QLabel:
 # ── ToolButton ────────────────────────────────────────────────────────────────
 
 class ToolButton(QPushButton):
-    """A single tool toggle button with icon text + label below."""
+    """
+    A single tool toggle button — shows the tool name clearly.
+    No emoji: they render as blobs on Windows.
+    """
 
     def __init__(self, tool: AnnotationTool, parent=None):
-        super().__init__(parent)
+        super().__init__(tool.display_name, parent)
         self.tool = tool
         self._selected = False
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(2, 3, 2, 3)
-        layout.setSpacing(1)
-
-        self._icon_lbl = QLabel(tool.unicode_icon)
-        self._icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        font_icon = QFont("Segoe UI", 13)
-        self._icon_lbl.setFont(font_icon)
-
-        self._name_lbl = QLabel(tool.display_name)
-        self._name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        font_name = QFont("Segoe UI", 7)
-        self._name_lbl.setFont(font_name)
-
-        layout.addWidget(self._icon_lbl)
-        layout.addWidget(self._name_lbl)
-
-        self.setFixedWidth(52)
+        self.setFont(QFont("Segoe UI", 9))
+        self.setFixedHeight(36)
+        self.setMinimumWidth(52)
+        self.setContentsMargins(6, 0, 6, 0)
         self.setCheckable(True)
         self.setToolTip(tool.tooltip)
         self.setFlat(True)
@@ -83,14 +71,14 @@ class ToolButton(QPushButton):
     def _refresh_style(self) -> None:
         if self._selected:
             self.setStyleSheet(
-                "QPushButton { background: #0078D4; border-radius: 5px; }"
-                "QLabel { color: white; }"
+                "QPushButton { background: #0078D4; color: white; border-radius: 5px;"
+                "              padding: 4px 10px; font-weight: bold; }"
             )
         else:
             self.setStyleSheet(
-                "QPushButton { background: transparent; border-radius: 5px; }"
-                "QPushButton:hover { background: #e0e0e0; }"
-                "QLabel { color: #333; }"
+                "QPushButton { background: transparent; color: #1a1a1a; border-radius: 5px;"
+                "              padding: 4px 10px; }"
+                "QPushButton:hover { background: #dcdcdc; }"
             )
 
 
@@ -115,56 +103,51 @@ class MarkupButton(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Main button
+        # Main button — name on top, colored strip on bottom
         self._btn = QPushButton()
         layout = QVBoxLayout(self._btn)
-        layout.setContentsMargins(2, 3, 2, 1)
-        layout.setSpacing(1)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(3)
 
-        icon_lbl = QLabel(tool.unicode_icon)
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_lbl.setFont(QFont("Segoe UI", 13))
         name_lbl = QLabel(tool.display_name)
         name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        name_lbl.setFont(QFont("Segoe UI", 7))
+        name_lbl.setFont(QFont("Segoe UI", 9))
 
-        # Color swatch strip
         self._swatch = QLabel()
-        self._swatch.setFixedHeight(3)
+        self._swatch.setFixedHeight(4)
         self._swatch.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_swatch()
 
-        layout.addWidget(icon_lbl)
         layout.addWidget(name_lbl)
         layout.addWidget(self._swatch)
 
-        self._btn.setFixedWidth(46)
+        self._btn.setFixedHeight(36)
+        self._btn.setMinimumWidth(62)
         self._btn.setFlat(True)
         self._btn.setToolTip(tool.tooltip)
         self._btn.clicked.connect(lambda: self.apply_clicked.emit(self.tool))
         self._btn.setStyleSheet(
-            "QPushButton { background: transparent; border-radius: 5px; }"
-            "QPushButton:hover { background: #e0e0e0; }"
+            "QPushButton { background: transparent; color: #1a1a1a; border-radius: 5px; }"
+            "QPushButton:hover { background: #dcdcdc; }"
         )
 
-        # Chevron button
+        # Chevron — color picker
         self._chev = QPushButton("▾")
-        self._chev.setFixedSize(14, 44)
+        self._chev.setFixedSize(16, 36)
         self._chev.setFlat(True)
-        self._chev.setFont(QFont("Segoe UI", 7))
+        self._chev.setFont(QFont("Segoe UI", 8))
         self._chev.setToolTip(f"Change {tool.display_name} color")
         self._chev.setStyleSheet(
-            "QPushButton { background: transparent; color: #888; }"
-            "QPushButton:hover { background: #ddd; }"
+            "QPushButton { background: transparent; color: #555; }"
+            "QPushButton:hover { background: #d0d0d0; border-radius: 3px; }"
         )
         self._chev.clicked.connect(self._pick_color)
 
         outer.addWidget(self._btn)
         outer.addWidget(self._chev)
 
-        # Border
         self.setStyleSheet(
-            "MarkupButton { border: 1px solid #ccc; border-radius: 5px; }"
+            "MarkupButton { border: 1px solid #ccc; border-radius: 5px; background: transparent; }"
         )
 
     @property
@@ -275,7 +258,7 @@ class AnnotationToolbar(QWidget):
         main_layout.addWidget(self._stroke_btn)
 
         # Delete button (shown when annotation is selected)
-        self._delete_btn = QPushButton("🗑 Delete")
+        self._delete_btn = QPushButton("Delete")
         self._delete_btn.setFixedHeight(28)
         self._delete_btn.setFont(QFont("Segoe UI", 8))
         self._delete_btn.setStyleSheet(
@@ -290,9 +273,11 @@ class AnnotationToolbar(QWidget):
         # Start with SELECT active
         self._set_active(AnnotationTool.SELECT)
 
-        self.setStyleSheet("AnnotationToolbar { background: #f5f5f5; "
-                           "border-bottom: 1px solid #ccc; }")
-        self.setFixedHeight(60)
+        self.setStyleSheet(
+            "AnnotationToolbar { background: #f5f5f5; border-bottom: 1px solid #c8c8c8; }"
+            "QLabel { color: #1a1a1a; }"
+        )
+        self.setFixedHeight(52)
 
     def _on_tool_click(self, tool: AnnotationTool) -> None:
         # Toggle off if already selected
